@@ -12,6 +12,10 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 jobs = {}
 
+# Common yt-dlp args to bypass bot detection on cloud servers
+YT_DLP_BASE = ["yt-dlp", "--no-warnings", "--extractor-args",
+                "youtube:player_client=ios,web"]
+
 
 @app.after_request
 def add_cors_headers(response):
@@ -33,8 +37,8 @@ def search():
     if not query:
         return jsonify({"error": "No query provided"}), 400
 
-    cmd = ["yt-dlp", f"ytsearch{limit}:{query}", "--flat-playlist", "-j",
-           "--no-warnings", "--extractor-args", "youtube:player_skip=webpage"]
+    cmd = YT_DLP_BASE + [f"ytsearch{limit}:{query}", "--flat-playlist", "-j",
+                          "--extractor-args", "youtube:player_skip=webpage"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         items = []
@@ -68,36 +72,24 @@ def search():
 @app.route("/api/stream/<video_id>")
 def get_stream(video_id):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = ["yt-dlp", "-f", "bestaudio", "-g", "--no-playlist", url]
+    # Get audio URL + metadata in one call using -j
+    cmd = YT_DLP_BASE + ["-f", "bestaudio", "-j", "--no-playlist", url]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
-        audio_url = result.stdout.strip()
+        info = json.loads(result.stdout)
+        audio_url = info.get("url", "")
         if not audio_url:
             return jsonify({"error": "No audio stream found"}), 400
 
-        # Also grab metadata
-        info_cmd = ["yt-dlp", "--no-playlist", "-j", url]
-        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
-        title, uploader, duration, thumbnail = "", "", 0, ""
-        if info_result.returncode == 0:
-            try:
-                info = json.loads(info_result.stdout)
-                title = info.get("title", "")
-                uploader = info.get("uploader", "")
-                duration = info.get("duration") or 0
-                thumbnail = info.get("thumbnail", "")
-            except json.JSONDecodeError:
-                pass
-
         return jsonify({
             "audioUrl": audio_url,
-            "title": title,
-            "uploader": uploader,
-            "duration": duration,
-            "thumbnail": thumbnail,
+            "title": info.get("title", ""),
+            "uploader": info.get("uploader", ""),
+            "duration": info.get("duration") or 0,
+            "thumbnail": info.get("thumbnail", ""),
         })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out getting stream"}), 400
@@ -116,7 +108,7 @@ def get_info():
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
-    cmd = ["yt-dlp", "--no-playlist", "-j", url]
+    cmd = YT_DLP_BASE + ["--no-playlist", "-j", url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
@@ -163,7 +155,7 @@ def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
+    cmd = YT_DLP_BASE + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
         cmd += ["-x", "--audio-format", "mp3"]
