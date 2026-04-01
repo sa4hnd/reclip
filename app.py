@@ -193,10 +193,10 @@ def run_download(job_id, url, format_choice, format_id, cookies_text=None):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "-o", out_template]
+    cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "--no-check-formats", "-o", out_template]
 
     if format_choice == "audio":
-        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
+        cmd += ["-x", "--audio-format", "mp3"]
     elif format_id:
         cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
     else:
