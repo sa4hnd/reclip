@@ -3,6 +3,7 @@ import uuid
 import glob
 import json
 import base64
+import tempfile
 import subprocess
 import threading
 from flask import Flask, request, jsonify, send_file, render_template
@@ -25,12 +26,32 @@ if cookies_b64:
         print(f"[ReClip] Failed to decode COOKIES_B64: {e}")
 
 
-def yt_dlp_cmd():
+def yt_dlp_cmd(cookies_text=None):
     """Build base yt-dlp command with cookies if available."""
     cmd = ["yt-dlp", "--no-warnings"]
-    if os.path.exists(COOKIES_FILE):
+    # Per-request cookies take priority over global cookies file
+    if cookies_text:
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False,
+                                          dir=DOWNLOAD_DIR, prefix="cookies_")
+        tmp.write(cookies_text)
+        tmp.close()
+        cmd += ["--cookies", tmp.name]
+    elif os.path.exists(COOKIES_FILE):
         cmd += ["--cookies", COOKIES_FILE]
     return cmd
+
+
+def cleanup_temp_cookies(cmd):
+    """Remove temp cookie file created by yt_dlp_cmd if any."""
+    for i, arg in enumerate(cmd):
+        if arg == "--cookies" and i + 1 < len(cmd):
+            path = cmd[i + 1]
+            if path.startswith(DOWNLOAD_DIR) and "cookies_" in path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            break
 
 
 @app.after_request
@@ -85,12 +106,16 @@ def search():
 #  Stream URL  (bestaudio + metadata in one call)
 # ──────────────────────────────────────────────
 
-@app.route("/api/stream/<video_id>")
+@app.route("/api/stream/<video_id>", methods=["GET", "POST"])
 def get_stream(video_id):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = yt_dlp_cmd() + ["-f", "bestaudio/best", "-j", "--no-playlist", url]
+    cookies_text = None
+    if request.method == "POST" and request.json:
+        cookies_text = request.json.get("cookies")
+    cmd = yt_dlp_cmd(cookies_text) + ["-f", "bestaudio/best", "-j", "--no-playlist", url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        cleanup_temp_cookies(cmd)
         if result.returncode != 0:
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
@@ -120,17 +145,19 @@ def get_stream(video_id):
 def get_info():
     data = request.json
     url = data.get("url", "").strip()
+    cookies_text = data.get("cookies")
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
     # Use --print to get just metadata without format resolution
-    cmd = yt_dlp_cmd() + [
+    cmd = yt_dlp_cmd(cookies_text) + [
         "--no-playlist", "--skip-download",
         "--print", "%(title)s\n%(thumbnail)s\n%(duration)s\n%(uploader)s",
         url
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        cleanup_temp_cookies(cmd)
         if result.returncode != 0:
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
@@ -162,11 +189,11 @@ def get_info():
 #  Download  (async job-based)
 # ──────────────────────────────────────────────
 
-def run_download(job_id, url, format_choice, format_id):
+def run_download(job_id, url, format_choice, format_id, cookies_text=None):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = yt_dlp_cmd() + ["--no-playlist", "-o", out_template]
+    cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
         cmd += ["-x", "--audio-format", "mp3"]
@@ -179,6 +206,7 @@ def run_download(job_id, url, format_choice, format_id):
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        cleanup_temp_cookies(cmd)
         if result.returncode != 0:
             job["status"] = "error"
             job["error"] = result.stderr.strip().split("\n")[-1]
@@ -228,6 +256,7 @@ def start_download():
     format_choice = data.get("format", "video")
     format_id = data.get("format_id")
     title = data.get("title", "")
+    cookies_text = data.get("cookies")
 
     if not url:
         return jsonify({"error": "No URL provided"}), 400
@@ -235,7 +264,7 @@ def start_download():
     job_id = uuid.uuid4().hex[:10]
     jobs[job_id] = {"status": "downloading", "url": url, "title": title}
 
-    thread = threading.Thread(target=run_download, args=(job_id, url, format_choice, format_id))
+    thread = threading.Thread(target=run_download, args=(job_id, url, format_choice, format_id, cookies_text))
     thread.daemon = True
     thread.start()
 
