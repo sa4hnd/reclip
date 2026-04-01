@@ -13,8 +13,8 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 jobs = {}
 
 # Common yt-dlp args to bypass bot detection on cloud servers
-YT_DLP_BASE = ["yt-dlp", "--no-warnings", "--extractor-args",
-                "youtube:player_client=ios,web"]
+YT_DLP_BASE = ["yt-dlp", "--no-warnings", "--no-check-formats",
+                "--extractor-args", "youtube:player_client=ios,web"]
 
 
 @app.after_request
