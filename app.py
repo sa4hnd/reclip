@@ -14,7 +14,7 @@ jobs = {}
 
 # Common yt-dlp args to bypass bot detection on cloud servers
 YT_DLP_BASE = ["yt-dlp", "--no-warnings", "--no-check-formats",
-                "--extractor-args", "youtube:player_client=ios,web"]
+                "--extractor-args", "youtube:player_client=web_creator,mediaconnect"]
 
 
 @app.after_request
