@@ -28,7 +28,8 @@ if cookies_b64:
 
 def yt_dlp_cmd(cookies_text=None):
     """Build base yt-dlp command with cookies if available."""
-    cmd = ["yt-dlp", "--no-warnings"]
+    cmd = ["yt-dlp", "--no-warnings", "--no-check-formats",
+           "--extractor-args", "youtube:player_client=ios,web"]
     # Per-request cookies take priority over global cookies file
     if cookies_text:
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False,
@@ -193,10 +194,10 @@ def run_download(job_id, url, format_choice, format_id, cookies_text=None):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "--no-check-formats", "-o", out_template]
+    cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
-        cmd += ["-x", "--audio-format", "mp3"]
+        cmd += ["-f", "bestaudio/best/worst", "-x", "--audio-format", "mp3"]
     elif format_id:
         cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
     else:
