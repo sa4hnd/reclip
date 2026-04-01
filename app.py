@@ -2,6 +2,7 @@ import os
 import uuid
 import glob
 import json
+import base64
 import subprocess
 import threading
 from flask import Flask, request, jsonify, send_file, render_template
@@ -11,9 +12,25 @@ DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 jobs = {}
+COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
-# Base yt-dlp args — ios client bypasses most bot detection on cloud servers
-YT_ARGS = ["--no-warnings", "--extractor-args", "youtube:player_client=ios"]
+# On startup: if COOKIES_B64 env var is set, decode it to cookies.txt
+cookies_b64 = os.environ.get("COOKIES_B64", "")
+if cookies_b64:
+    try:
+        with open(COOKIES_FILE, "wb") as f:
+            f.write(base64.b64decode(cookies_b64))
+        print(f"[ReClip] Loaded cookies from COOKIES_B64 env var")
+    except Exception as e:
+        print(f"[ReClip] Failed to decode COOKIES_B64: {e}")
+
+
+def yt_dlp_cmd():
+    """Build base yt-dlp command with cookies if available."""
+    cmd = ["yt-dlp", "--no-warnings"]
+    if os.path.exists(COOKIES_FILE):
+        cmd += ["--cookies", COOKIES_FILE]
+    return cmd
 
 
 @app.after_request
@@ -36,7 +53,7 @@ def search():
     if not query:
         return jsonify({"error": "No query provided"}), 400
 
-    cmd = ["yt-dlp"] + YT_ARGS + [f"ytsearch{limit}:{query}", "--flat-playlist",
+    cmd = yt_dlp_cmd() + [f"ytsearch{limit}:{query}", "--flat-playlist",
            "-j", "--extractor-args", "youtube:player_skip=webpage"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -71,7 +88,7 @@ def search():
 @app.route("/api/stream/<video_id>")
 def get_stream(video_id):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = ["yt-dlp"] + YT_ARGS + ["-f", "bestaudio/best", "-j", "--no-playlist", url]
+    cmd = yt_dlp_cmd() + ["-f", "bestaudio/best", "-j", "--no-playlist", url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
@@ -107,7 +124,7 @@ def get_info():
         return jsonify({"error": "No URL provided"}), 400
 
     # Use --print to get just metadata without format resolution
-    cmd = ["yt-dlp"] + YT_ARGS + [
+    cmd = yt_dlp_cmd() + [
         "--no-playlist", "--skip-download",
         "--print", "%(title)s\n%(thumbnail)s\n%(duration)s\n%(uploader)s",
         url
@@ -149,7 +166,7 @@ def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = ["yt-dlp"] + YT_ARGS + ["--no-playlist", "-o", out_template]
+    cmd = yt_dlp_cmd() + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
         cmd += ["-x", "--audio-format", "mp3"]
