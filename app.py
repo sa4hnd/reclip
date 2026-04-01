@@ -196,7 +196,7 @@ def run_download(job_id, url, format_choice, format_id, cookies_text=None):
     cmd = yt_dlp_cmd(cookies_text) + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
-        cmd += ["-x", "--audio-format", "mp3"]
+        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
     elif format_id:
         cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
     else:
