@@ -12,9 +12,8 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 jobs = {}
 
-# Common yt-dlp args to bypass bot detection on cloud servers
-YT_DLP_BASE = ["yt-dlp", "--no-warnings", "--no-check-formats",
-                "--extractor-args", "youtube:player_client=web_creator,mediaconnect"]
+# Base yt-dlp args — ios client bypasses most bot detection on cloud servers
+YT_ARGS = ["--no-warnings", "--extractor-args", "youtube:player_client=ios"]
 
 
 @app.after_request
@@ -26,7 +25,7 @@ def add_cors_headers(response):
 
 
 # ──────────────────────────────────────────────
-#  Search  (yt-dlp ytsearch)
+#  Search  (flat playlist — no video access needed)
 # ──────────────────────────────────────────────
 
 @app.route("/api/search", methods=["POST"])
@@ -37,8 +36,8 @@ def search():
     if not query:
         return jsonify({"error": "No query provided"}), 400
 
-    cmd = YT_DLP_BASE + [f"ytsearch{limit}:{query}", "--flat-playlist", "-j",
-                          "--extractor-args", "youtube:player_skip=webpage"]
+    cmd = ["yt-dlp"] + YT_ARGS + [f"ytsearch{limit}:{query}", "--flat-playlist",
+           "-j", "--extractor-args", "youtube:player_skip=webpage"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         items = []
@@ -66,14 +65,13 @@ def search():
 
 
 # ──────────────────────────────────────────────
-#  Stream URL  (returns direct audio URL for playback)
+#  Stream URL  (bestaudio + metadata in one call)
 # ──────────────────────────────────────────────
 
 @app.route("/api/stream/<video_id>")
 def get_stream(video_id):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    # Get audio URL + metadata in one call using -j
-    cmd = YT_DLP_BASE + ["-f", "bestaudio", "-j", "--no-playlist", url]
+    cmd = ["yt-dlp"] + YT_ARGS + ["-f", "bestaudio/best", "-j", "--no-playlist", url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
@@ -98,7 +96,7 @@ def get_stream(video_id):
 
 
 # ──────────────────────────────────────────────
-#  Info  (video metadata + quality options)
+#  Info  (metadata only — uses --skip-download)
 # ──────────────────────────────────────────────
 
 @app.route("/api/info", methods=["POST"])
@@ -108,38 +106,34 @@ def get_info():
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
-    cmd = YT_DLP_BASE + ["--no-playlist", "-j", url]
+    # Use --print to get just metadata without format resolution
+    cmd = ["yt-dlp"] + YT_ARGS + [
+        "--no-playlist", "--skip-download",
+        "--print", "%(title)s\n%(thumbnail)s\n%(duration)s\n%(uploader)s",
+        url
+    ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
-        info = json.loads(result.stdout)
+        lines = result.stdout.strip().split("\n")
+        title = lines[0] if len(lines) > 0 else ""
+        thumbnail = lines[1] if len(lines) > 1 else ""
+        duration_str = lines[2] if len(lines) > 2 else "0"
+        uploader = lines[3] if len(lines) > 3 else ""
 
-        # Build quality options — keep best format per resolution
-        best_by_height = {}
-        for f in info.get("formats", []):
-            height = f.get("height")
-            if height and f.get("vcodec", "none") != "none":
-                tbr = f.get("tbr") or 0
-                if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
-                    best_by_height[height] = f
-
-        formats = []
-        for height, f in best_by_height.items():
-            formats.append({
-                "id": f["format_id"],
-                "label": f"{height}p",
-                "height": height,
-            })
-        formats.sort(key=lambda x: x["height"], reverse=True)
+        try:
+            duration = int(float(duration_str)) if duration_str and duration_str != "NA" else 0
+        except (ValueError, TypeError):
+            duration = 0
 
         return jsonify({
-            "title": info.get("title", ""),
-            "thumbnail": info.get("thumbnail", ""),
-            "duration": info.get("duration"),
-            "uploader": info.get("uploader", ""),
-            "formats": formats,
+            "title": title,
+            "thumbnail": thumbnail,
+            "duration": duration,
+            "uploader": uploader,
+            "formats": [],
         })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out fetching video info"}), 400
@@ -155,7 +149,7 @@ def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = YT_DLP_BASE + ["--no-playlist", "-o", out_template]
+    cmd = ["yt-dlp"] + YT_ARGS + ["--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
         cmd += ["-x", "--audio-format", "mp3"]
